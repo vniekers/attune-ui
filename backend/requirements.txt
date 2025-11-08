@@ -1,7 +1,7 @@
 ﻿fastapi==0.114.2
 uvicorn[standard]==0.30.6
 sqlalchemy==2.0.36
-psycopg[binary]==3.2.1
+psycopg[binary]==3.2.10
 qdrant-client==1.9.1
 pydantic==2.10.3
 openai==1.51.2
