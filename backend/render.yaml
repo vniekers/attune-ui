@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: codex-backend
+    env: python
+    plan: starter
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://api.fireworks.ai/inference/v1
+      - key: OPENAI_MODEL
+        value: accounts/fireworks/models/llama-v3p1-70b-instruct
+
+      - key: NEON_URL
+        sync: false
+
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+
+      - key: EMBED_MODEL
+        value: BAAI/bge-small-en-v1.5
+      - key: PRIVATE_COLLECTION
+        value: codex-private
+      - key: SHARED_COLLECTION
+        value: codex-shared
+
+      - key: API_AUTH_TOKEN
+        sync: false
+
+      - key: HF_HOME
+        value: /opt/hf-cache
+      - key: SENTENCE_TRANSFORMERS_HOME
+        value: /opt/hf-cache
+      - key: HF_HUB_READ_TIMEOUT
+        value: "60"
+      - key: HF_HUB_CONNECT_TIMEOUT
+        value: "30"
+
+    disk:
+      name: hf-cache
+      mountPath: /opt/hf-cache
+      sizeGB: 5
