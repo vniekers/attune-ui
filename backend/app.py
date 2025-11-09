@@ -1,42 +1,16 @@
-# --- Robust env loading: do this BEFORE any other imports use envs ---
+# --- Environment loading (Render-safe; .env optional) ---
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 ENV_PATH = Path(__file__).parent / ".env"
 
-def _load_env_force(path: Path):
-    """Load KEY=VALUE lines from .env with BOM tolerance, overriding process env."""
-    if not path.exists():
-        raise RuntimeError(f".env not found at {path.resolve()}")
-    # try utf-8-sig (handles BOM), fall back to ascii/utf-8
-    for enc in ("utf-8-sig", "utf-8"):
-        try:
-            text = path.read_text(encoding=enc)
-            break
-        except UnicodeError:
-            continue
-    else:
-        # last resort: raw read then decode errors ignored
-        text = path.read_bytes().decode("utf-8", errors="ignore")
+# In local dev, load .env if it exists. In Render, env vars come from the dashboard.
+if ENV_PATH.exists():
+    # Do NOT override already-set process envs (e.g., from Render)
+    load_dotenv(dotenv_path=ENV_PATH, override=False)
 
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            # ignore malformed lines quietly
-            continue
-        key, val = line.split("=", 1)
-        key = key.strip()
-        val = val.strip()
-        # strip surrounding quotes if present
-        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-            val = val[1:-1]
-        os.environ[key] = val
-
-_load_env_force(ENV_PATH)
-
-# required keys check (fail fast with a clear message)
+# Required keys must be present either from .env (dev) or dashboard (Render)
 REQUIRED = [
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
     "NEON_URL", "QDRANT_URL", "API_AUTH_TOKEN"
@@ -44,34 +18,11 @@ REQUIRED = [
 missing = [k for k in REQUIRED if not os.getenv(k)]
 if missing:
     raise RuntimeError(
-        f"Missing required env vars in {ENV_PATH.resolve()} -> {missing}. "
-        f"Open the file and ensure each is 'KEY=VALUE' with no quotes or trailing spaces."
+        "Missing required environment variables: "
+        + ", ".join(missing)
+        + ". In production, set them in Render → Settings → Environment. "
+        + "In local dev, add them to backend/.env"
     )
-
-# Optional debug (keep until it works)
-print("Using .env at:", ENV_PATH.resolve())
-print("OPENAI_API_KEY present:", bool(os.getenv("OPENAI_API_KEY")))
-print("NEON_URL:", os.getenv("NEON_URL"))
-
-import os
-from pathlib import Path
-from dotenv import load_dotenv, dotenv_values
-
-ENV_PATH = Path(__file__).parent / ".env"
-if not ENV_PATH.exists():
-    raise RuntimeError(f".env not found at {ENV_PATH.resolve()}")
-
-load_dotenv(dotenv_path=ENV_PATH, override=True)
-
-# Debug prints (keep until this works)
-vals = dotenv_values(ENV_PATH)
-print("Using .env at:", ENV_PATH.resolve())
-print("ENV snapshot -> OPENAI_MODEL:", vals.get("OPENAI_MODEL"), "| NEON_URL:", vals.get("NEON_URL"))
-print("OPENAI_API_KEY present now:", bool(os.getenv("OPENAI_API_KEY")))
-
-from datetime import datetime
-print("### STARTUP MARKER:", datetime.now().isoformat())
-print("### RUNNING APP FILE:", __file__)
 
 import json
 import uuid
@@ -84,28 +35,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 from sentence_transformers import SentenceTransformer
 from openai import OpenAI
-# from pathlib import Path
-# from dotenv import load_dotenv, dotenv_values
 
-# --- Robust .env loading (forces using backend/.env and overrides stale vars) ---
-# ENV_PATH = Path(__file__).parent / ".env"
-# if not ENV_PATH.exists():
-#    raise RuntimeError(f".env not found at {ENV_PATH.resolve()}")
-
-# load_dotenv(dotenv_path=ENV_PATH, override=True)
-
-# Debug prints (keep until it works; then you can remove)
-# vals = dotenv_values(ENV_PATH)
-# print("Using .env at:", ENV_PATH.resolve())
-# print("ENV snapshot -> OPENAI_MODEL:", vals.get("OPENAI_MODEL"), "| NEON_URL:", vals.get("NEON_URL"))
-# print("OPENAI_API_KEY present now:", bool(os.getenv("OPENAI_API_KEY")))
-
-#from dotenv import load_dotenv
-#print("OPENAI_API_KEY present:", bool(os.getenv("OPENAI_API_KEY")))
-#print("NEON_URL:", os.getenv("NEON_URL"))
-
-# Load environment variables from .env
-#load_dotenv()
 
 # === CONFIGURATION ===
 OPENAI_BASE = os.environ["OPENAI_BASE_URL"]
