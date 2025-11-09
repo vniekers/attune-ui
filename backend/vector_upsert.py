@@ -42,4 +42,5 @@ def upsert_texts(
             vectors=vectors,
             payloads=payloads,
         ),
+        wait=True,
     )

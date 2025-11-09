@@ -394,12 +394,14 @@ async def e2e_smoke(_ok=Depends(require_api_token)) -> Dict[str, Any]:
                 vectors=[vector],
                 payloads=[payload],
             ),
+            wait=True,
         )
         # search it back
         res = qdr.search(
             collection_name=temp_col,
             query_vector=vector,
             limit=1,
+            with_payload=False,
         )
         hit_ok = bool(res) and res[0].id == point_id
         # cleanup
