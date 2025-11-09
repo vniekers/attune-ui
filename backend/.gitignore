@@ -8,3 +8,8 @@ __pycache__/
 *.log
 *.sqlite3
 .DS_Store
+Backup Tiny/
+start.ps1
+requirements.lock
+backend/notusedProcfile
+backend/requirements.lock

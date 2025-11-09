@@ -3,8 +3,18 @@ services:
     name: codex-backend
     env: python
     plan: starter
+    region: frankfurt
+    rootDir: ./backend
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    startCommand: >
+      uvicorn app:app
+      --host 0.0.0.0 --port $PORT
+      --workers 1
+      --limit-concurrency 50
+      --backlog 64
+      --timeout-keep-alive 5
+    healthCheckPath: /health
+    autoDeploy: true
     envVars:
       - key: OPENAI_API_KEY
         sync: false
@@ -22,7 +32,7 @@ services:
         sync: false
 
       - key: EMBED_MODEL
-        value: BAAI/bge-small-en-v1.5
+        value: nomic-ai/nomic-embed-text-v1.5   # example remote model
       - key: PRIVATE_COLLECTION
         value: codex-private
       - key: SHARED_COLLECTION
@@ -30,17 +40,3 @@ services:
 
       - key: API_AUTH_TOKEN
         sync: false
-
-      - key: HF_HOME
-        value: /opt/hf-cache
-      - key: SENTENCE_TRANSFORMERS_HOME
-        value: /opt/hf-cache
-      - key: HF_HUB_READ_TIMEOUT
-        value: "60"
-      - key: HF_HUB_CONNECT_TIMEOUT
-        value: "30"
-
-    disk:
-      name: hf-cache
-      mountPath: /opt/hf-cache
-      sizeGB: 5
