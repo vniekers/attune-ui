@@ -5,6 +5,9 @@ from dotenv import load_dotenv
 
 ENV_PATH = Path(__file__).parent / ".env"
 
+# Hardcoding bad practise to get server up
+EMBED_DIM = int(os.getenv("EMBED_DIMENSION", "768"))  # nomic-embed-text-v1.5 = 768
+
 # In local dev, load .env if it exists. In Render, env vars come from the dashboard.
 if ENV_PATH.exists():
     # Do NOT override already-set process envs (e.g., from Render)
@@ -54,7 +57,8 @@ engine = create_engine(NEON_URL, pool_pre_ping=True, future=True)
 qdrant = QdrantClient(
     url=QDRANT_URL,
     api_key=os.getenv("QDRANT_API_KEY"))
-EMBED_DIM = embedder.get_sentence_embedding_dimension()
+
+# EMBED_DIM = embedder.get_sentence_embedding_dimension()
 client = OpenAI(base_url=OPENAI_BASE, api_key=OPENAI_KEY)
 
 # === DATABASE + VECTOR SETUP ===
