@@ -33,14 +33,15 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, text
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
-#from sentence_transformers import SentenceTransformer
-from .embeddings import embed_texts  # or embed_texts_sync
+# from sentence_transformers import SentenceTransformer
+from .embeddings import embed_texts, embed_texts_sync  # or embed_texts_sync
 
 # async context (inside FastAPI endpoints/tasks):
-vectors = await embed_texts(texts)
+# vectors = await embed_texts(texts)
 
 # sync scripts / one-off ingestion:
-vectors = embed_texts_sync(texts)
+# from embeddings import embed_texts_sync  # if not already imported
+# vectors = embed_texts_sync(texts)
 
 from openai import OpenAI
 
