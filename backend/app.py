@@ -358,60 +358,59 @@ async def e2e_smoke(_ok=Depends(require_api_token)) -> Dict[str, Any]:
         report["neon"] = {"ok": False}
         errors["neon"] = str(e)
 
-    # 4) Qdrant info + roundtrip upsert/search in a TEMP collection
-    t0 = time.perf_counter()
-    try:
-        qdr = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        info = qdr.get_collections()
-        report["qdrant_info"] = {
-            "ok": True,
-            "collections": [c.name for c in info.collections],
-            "latency_ms": int((time.perf_counter()-t0)*1000),
-        }
-    except Exception as e:
-        overall_ok = False
-        report["qdrant_info"] = {"ok": False}
-        errors["qdrant_info"] = str(e)
-
-    # Roundtrip test in temp collection (create -> upsert -> search -> delete)
+    # 4) Qdrant roundtrip in a temp collection (diagnostic version)
     t0 = time.perf_counter()
     temp_col = f"codex-smoke-{uuid.uuid4().hex[:8]}"
     try:
         qdr = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        # create temp collection
+
+        # Create temp collection with the probed embedding dim (fallback 384)
         qdr.recreate_collection(
             collection_name=temp_col,
-            vectors_config=qm.VectorParams(size=dim or 768, distance=qm.Distance.COSINE),
+            vectors_config=qm.VectorParams(size=dim or 384, distance=qm.Distance.COSINE),
         )
-        # upsert 1 point
-        from random import random
+
+        # Embed a single test vector
+        vector = (await embed_texts(["temp roundtrip"]))[0]
+
+        # Insert one point and block until visible
         point_id = uuid.uuid4().hex
         payload = {"tag": "smoke", "ts": int(time.time())}
-        vector = (await embed_texts(["temp roundtrip"]))[0]
         qdr.upsert(
             collection_name=temp_col,
-            points=qm.Batch(
-                ids=[point_id],
-                vectors=[vector],
-                payloads=[payload],
-            ),
+            points=qm.Batch(ids=[point_id], vectors=[vector], payloads=[payload]),
             wait=True,
         )
-        # search it back
+
+        # Sanity check: count & retrieve by id
+        cnt = qdr.count(collection_name=temp_col, exact=True).count
+        retrieved = qdr.retrieve(collection_name=temp_col, ids=[point_id])
+        retrieved_ok = bool(retrieved) and str(retrieved[0].id) == str(point_id)
+
+        # Exact search (bypass ANN timing)
         res = qdr.search(
             collection_name=temp_col,
             query_vector=vector,
             limit=1,
             with_payload=False,
+            search_params=qm.SearchParams(exact=True),
         )
-        hit_ok = bool(res) and res[0].id == point_id
-        # cleanup
+        search_ok = bool(res) and str(res[0].id) == str(point_id)
+        search_score = (res[0].score if res else None)
+
+        # Cleanup
         qdr.delete_collection(collection_name=temp_col)
 
+        hit_ok = (cnt >= 1) and retrieved_ok and search_ok
         report["qdrant_roundtrip"] = {
             "ok": hit_ok,
-            "latency_ms": int((time.perf_counter()-t0)*1000),
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
             "temp_collection": temp_col,
+            "count": cnt,
+            "retrieved_ok": retrieved_ok,
+            "search_ok": search_ok,
+            "search_score": search_score,
+            "dim_used": dim or 384,
         }
         if not hit_ok:
             overall_ok = False
@@ -419,6 +418,3 @@ async def e2e_smoke(_ok=Depends(require_api_token)) -> Dict[str, Any]:
         overall_ok = False
         report["qdrant_roundtrip"] = {"ok": False, "temp_collection": temp_col}
         errors["qdrant_roundtrip"] = str(e)
-
-    return {"ok": overall_ok, "report": report, "errors": errors or None}
-
