@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 ENV_PATH = Path(__file__).parent / ".env"
 
 # Hardcoding bad practise to get server up
-EMBED_DIM = int(os.getenv("EMBED_DIMENSION", "768"))  # nomic-embed-text-v1.5 = 768
+# EMBED_DIM = int(os.getenv("EMBED_DIMENSION", "768"))  # nomic-embed-text-v1.5 = 768
+EMBED_DIM = int(os.getenv("EMBED_DIMENSION", "384"))  # BAAI/bge-small-en-v1.5 = 384
 
 # In local dev, load .env if it exists. In Render, env vars come from the dashboard.
 if ENV_PATH.exists():
