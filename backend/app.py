@@ -261,160 +261,156 @@ def chat(req: ChatRequest, _: None = Depends(require_auth)):
     return {"reply": reply.model_dump(), "used_memory": recall}
 
 # ========= E2E SMOKE TEST =========
+from fastapi import Depends, Header, HTTPException, status, Query
+from fastapi.responses import JSONResponse
 import os, time, uuid, httpx
 from typing import Any, Dict
-from fastapi import Depends, Header, HTTPException, status
-from qdrant_client.http import models as qm
-from qdrant_client import QdrantClient
 from sqlalchemy import text
-from .embeddings import embed_texts  # async helper we added
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qm
+from .embeddings import embed_texts
 
-API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN")
+API_AUTH_TOKEN = (os.getenv("API_AUTH_TOKEN") or "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL")
 QDRANT_URL     = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-PRIVATE_COL    = os.getenv("PRIVATE_COLLECTION", "codex-private")
 
 def require_api_token(
     x_api_key: str | None = Header(default=None, convert_underscores=False),
     authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
 ):
-    token = API_AUTH_TOKEN
-    if token and x_api_key == token:
+    want = API_AUTH_TOKEN
+    if token and token.strip() == want:
         return True
-    if token and authorization and authorization.lower().startswith("bearer "):
-        if authorization.split(" ", 1)[1].strip() == token:
+    if x_api_key and x_api_key.strip() == want:
+        return True
+    if authorization and authorization.strip().lower().startswith("bearer "):
+        got = authorization.split(" ", 1)[1].strip()
+        if got == want:
             return True
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 @app.get("/e2e-smoke")
-async def e2e_smoke(_ok=Depends(require_api_token)) -> Dict[str, Any]:
+async def e2e_smoke(_ok=Depends(require_api_token)):
     report: Dict[str, Any] = {}
     errors: Dict[str, str] = {}
     overall_ok = True
 
-    # 1) Fireworks CHAT
-    t0 = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(
-                "https://api.fireworks.ai/inference/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-                json={
-                    "model": OPENAI_MODEL,
-                    "messages": [{"role":"user","content":"Say 'smoke ok'"}],
-                    "temperature": 0.0,
-                    "max_tokens": 32,
-                    "stream": False,
-                },
+        # 1) Fireworks chat
+        t0 = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    "https://api.fireworks.ai/inference/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                    json={
+                        "model": OPENAI_MODEL,
+                        "messages": [{"role":"user","content":"Say 'Smoke ok'"}],
+                        "temperature": 0.0,
+                        "max_tokens": 32,
+                        "stream": False,
+                    },
+                )
+                r.raise_for_status()
+                data = r.json()
+                reply = data["choices"][0]["message"]["content"]
+            report["fireworks_chat"] = {
+                "ok": True,
+                "latency_ms": int((time.perf_counter()-t0)*1000),
+                "snippet": reply[:100],
+            }
+        except Exception as e:
+            overall_ok = False
+            report["fireworks_chat"] = {"ok": False}
+            errors["fireworks_chat"] = str(e)
+
+        # 2) Embeddings (probe dim)
+        dim = None
+        t0 = time.perf_counter()
+        try:
+            vecs = await embed_texts(["smoke probe"])
+            dim = len(vecs[0]) if vecs else None
+            report["embeddings"] = {
+                "ok": True,
+                "latency_ms": int((time.perf_counter()-t0)*1000),
+                "dim": dim,
+            }
+        except Exception as e:
+            overall_ok = False
+            report["embeddings"] = {"ok": False}
+            errors["embeddings"] = str(e)
+            dim = int(os.getenv("EMBED_DIMENSION", "384"))  # fallback
+
+        # 3) Neon (Postgres)
+        t0 = time.perf_counter()
+        try:
+            if engine is None:
+                raise RuntimeError("SQLAlchemy engine not initialized")
+            with engine.connect() as conn:
+                one = conn.execute(text("select 1")).scalar()
+            ok = (one == 1)
+            report["neon"] = {"ok": ok, "latency_ms": int((time.perf_counter()-t0)*1000)}
+            if not ok:
+                overall_ok = False
+        except Exception as e:
+            overall_ok = False
+            report["neon"] = {"ok": False}
+            errors["neon"] = str(e)
+
+        # 4) Qdrant roundtrip (diagnostic)
+        t0 = time.perf_counter()
+        temp_col = f"codex-smoke-{uuid.uuid4().hex[:8]}"
+        try:
+            qdr = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+            qdr.recreate_collection(
+                collection_name=temp_col,
+                vectors_config=qm.VectorParams(size=dim or 384, distance=qm.Distance.COSINE),
             )
-            r.raise_for_status()
-            data = r.json()
-            reply = data["choices"][0]["message"]["content"]
-        report["fireworks_chat"] = {
-            "ok": True,
-            "latency_ms": int((time.perf_counter()-t0)*1000),
-            "snippet": reply[:100],
-        }
-    except Exception as e:
-        overall_ok = False
-        report["fireworks_chat"] = {"ok": False}
-        errors["fireworks_chat"] = str(e)
+            vector = (await embed_texts(["temp roundtrip"]))[0]
+            pid = uuid.uuid4().hex
+            qdr.upsert(
+                collection_name=temp_col,
+                points=qm.Batch(ids=[pid], vectors=[vector], payloads=[{"tag":"smoke"}]),
+                wait=True,
+            )
+            cnt = qdr.count(collection_name=temp_col, exact=True).count
+            retrieved = qdr.retrieve(collection_name=temp_col, ids=[pid])
+            retrieved_ok = bool(retrieved) and str(retrieved[0].id) == str(pid)
+            res = qdr.search(
+                collection_name=temp_col,
+                query_vector=vector,
+                limit=1,
+                with_payload=False,
+                search_params=qm.SearchParams(exact=True),
+            )
+            search_ok = bool(res) and str(res[0].id) == str(pid)
+            score = (res[0].score if res else None)
+            qdr.delete_collection(collection_name=temp_col)
 
-    # 2) Fireworks EMBEDDINGS (also gives us dim)
-    dim = None
-    t0 = time.perf_counter()
-    try:
-        vecs = await embed_texts(["smoke probe"])
-        dim = len(vecs[0])
-        report["embeddings"] = {
-            "ok": True,
-            "latency_ms": int((time.perf_counter()-t0)*1000),
-            "dim": dim,
-        }
-    except Exception as e:
-        overall_ok = False
-        report["embeddings"] = {"ok": False}
-        errors["embeddings"] = str(e)
-        # fallback to 768 for the next step if needed
-        dim = 768
-
-    # 3) Neon (Postgres) connectivity
-    t0 = time.perf_counter()
-    try:
-        if engine is None:
-            raise RuntimeError("SQLAlchemy engine not initialized")
-        with engine.connect() as conn:
-            one = conn.execute(text("select 1")).scalar()
-        report["neon"] = {
-            "ok": one == 1,
-            "latency_ms": int((time.perf_counter()-t0)*1000),
-        }
-        if one != 1:
+            hit_ok = (cnt >= 1) and retrieved_ok and search_ok
+            report["qdrant_roundtrip"] = {
+                "ok": hit_ok,
+                "latency_ms": int((time.perf_counter()-t0)*1000),
+                "temp_collection": temp_col,
+                "count": cnt,
+                "retrieved_ok": retrieved_ok,
+                "search_ok": search_ok,
+                "search_score": score,
+                "dim_used": dim or 384,
+            }
+            if not hit_ok:
+                overall_ok = False
+        except Exception as e:
             overall_ok = False
+            report["qdrant_roundtrip"] = {"ok": False, "temp_collection": temp_col}
+            errors["qdrant_roundtrip"] = str(e)
+
     except Exception as e:
         overall_ok = False
-        report["neon"] = {"ok": False}
-        errors["neon"] = str(e)
+        errors["unhandled"] = str(e)
 
-    # 4) Qdrant roundtrip in a temp collection (diagnostic version)
-    t0 = time.perf_counter()
-    temp_col = f"codex-smoke-{uuid.uuid4().hex[:8]}"
-    try:
-        qdr = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-
-        # Create temp collection with the probed embedding dim (fallback 384)
-        qdr.recreate_collection(
-            collection_name=temp_col,
-            vectors_config=qm.VectorParams(size=dim or 384, distance=qm.Distance.COSINE),
-        )
-
-        # Embed a single test vector
-        vector = (await embed_texts(["temp roundtrip"]))[0]
-
-        # Insert one point and block until visible
-        point_id = uuid.uuid4().hex
-        payload = {"tag": "smoke", "ts": int(time.time())}
-        qdr.upsert(
-            collection_name=temp_col,
-            points=qm.Batch(ids=[point_id], vectors=[vector], payloads=[payload]),
-            wait=True,
-        )
-
-        # Sanity check: count & retrieve by id
-        cnt = qdr.count(collection_name=temp_col, exact=True).count
-        retrieved = qdr.retrieve(collection_name=temp_col, ids=[point_id])
-        retrieved_ok = bool(retrieved) and str(retrieved[0].id) == str(point_id)
-
-        # Exact search (bypass ANN timing)
-        res = qdr.search(
-            collection_name=temp_col,
-            query_vector=vector,
-            limit=1,
-            with_payload=False,
-            search_params=qm.SearchParams(exact=True),
-        )
-        search_ok = bool(res) and str(res[0].id) == str(point_id)
-        search_score = (res[0].score if res else None)
-
-        # Cleanup
-        qdr.delete_collection(collection_name=temp_col)
-
-        hit_ok = (cnt >= 1) and retrieved_ok and search_ok
-        report["qdrant_roundtrip"] = {
-            "ok": hit_ok,
-            "latency_ms": int((time.perf_counter() - t0) * 1000),
-            "temp_collection": temp_col,
-            "count": cnt,
-            "retrieved_ok": retrieved_ok,
-            "search_ok": search_ok,
-            "search_score": search_score,
-            "dim_used": dim or 384,
-        }
-        if not hit_ok:
-            overall_ok = False
-    except Exception as e:
-        overall_ok = False
-        report["qdrant_roundtrip"] = {"ok": False, "temp_collection": temp_col}
-        errors["qdrant_roundtrip"] = str(e)
+    # Always return a JSONResponse so FastAPI never tries to serialize None
+    return JSONResponse({"ok": overall_ok, "report": report, "errors": errors or None})
