@@ -361,6 +361,7 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
             errors["neon"] = str(e)
 
         # 4) Qdrant roundtrip (diagnostic)
+
     # 4) Qdrant roundtrip in a temp collection (PointStruct to force ID)
     t0 = time.perf_counter()
     temp_col = f"codex-smoke-{uuid.uuid4().hex[:8]}"
