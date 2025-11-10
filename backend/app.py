@@ -360,74 +360,57 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
             report["neon"] = {"ok": False}
             errors["neon"] = str(e)
 
-        # 4) Qdrant roundtrip in a temp collection (PointStruct to force ID)
+        # 4) Qdrant roundtrip (diagnostic)
         t0 = time.perf_counter()
         temp_col = f"codex-smoke-{uuid.uuid4().hex[:8]}"
         try:
             qdr = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-
-            # Create temp collection at the probed dim
             qdr.recreate_collection(
-            collection_name=temp_col,
-            vectors_config=qm.VectorParams(size=dim or 384, distance=qm.Distance.COSINE),
-        )
+                collection_name=temp_col,
+                vectors_config=qm.VectorParams(size=dim or 384, distance=qm.Distance.COSINE),
+            )
+            vector = (await embed_texts(["temp roundtrip"]))[0]
+            pid = uuid.uuid4().hex
+            qdr.upsert(
+                collection_name=temp_col,
+                points=qm.Batch(ids=[pid], vectors=[vector], payloads=[{"tag":"smoke"}]),
+                wait=True,
+            )
+            cnt = qdr.count(collection_name=temp_col, exact=True).count
+            retrieved = qdr.retrieve(collection_name=temp_col, ids=[pid])
+            retrieved_ok = bool(retrieved) and str(retrieved[0].id) == str(pid)
+            res = qdr.search(
+                collection_name=temp_col,
+                query_vector=vector,
+                limit=1,
+                with_payload=False,
+                search_params=qm.SearchParams(exact=True),
+            )
+            search_ok = bool(res) and str(res[0].id) == str(pid)
+            score = (res[0].score if res else None)
+            qdr.delete_collection(collection_name=temp_col)
 
-        # Embed test vector
-        vector = (await embed_texts(["temp roundtrip"]))[0]
-        point_id = uuid.uuid4().hex
-        payload = {"tag": "smoke", "ts": int(time.time())}
-
-        # ⬇️ Use PointStruct so our string ID is guaranteed to be used
-        qdr.upsert(
-            collection_name=temp_col,
-            points=[
-                qm.PointStruct(id=point_id, vector=vector, payload=payload),
-            ],
-            wait=True,
-        )
-
-        # Sanity checks
-        cnt = qdr.count(collection_name=temp_col, exact=True).count
-        retrieved = qdr.retrieve(collection_name=temp_col, ids=[point_id])
-        retrieved_ok = bool(retrieved) and str(retrieved[0].id) == str(point_id)
-
-        # Exact search
-        res = qdr.search(
-            collection_name=temp_col,
-            query_vector=vector,
-            limit=1,
-            with_payload=False,
-            search_params=qm.SearchParams(exact=True),
-        )
-        top_id = (str(res[0].id) if res else None)
-        search_ok = bool(res) and top_id == str(point_id)
-        score = (res[0].score if res else None)
-
-        # Extra retrieval by whatever search returned (to diagnose)
-        retrieved_by_top = qdr.retrieve(collection_name=temp_col, ids=[top_id]) if top_id else []
-        retrieved_by_top_ok = bool(retrieved_by_top)
-
-        # Cleanup
-        qdr.delete_collection(collection_name=temp_col)
-
-        hit_ok = (cnt >= 1) and retrieved_ok and search_ok
-        report["qdrant_roundtrip"] = {
-            "ok": hit_ok,
-            "latency_ms": int((time.perf_counter() - t0) * 1000),
-            "temp_collection": temp_col,
-            "count": cnt,
-            "retrieved_ok": retrieved_ok,
-            "search_ok": search_ok,
-            "search_score": score,
-            "dim_used": dim or 384,
-            "search_top_id": top_id,
-            "retrieved_by_top_ok": retrieved_by_top_ok,
-        }
-        if not hit_ok:
+            hit_ok = (cnt >= 1) and retrieved_ok and search_ok
+            report["qdrant_roundtrip"] = {
+                "ok": hit_ok,
+                "latency_ms": int((time.perf_counter()-t0)*1000),
+                "temp_collection": temp_col,
+                "count": cnt,
+                "retrieved_ok": retrieved_ok,
+                "search_ok": search_ok,
+                "search_score": score,
+                "dim_used": dim or 384,
+            }
+            if not hit_ok:
+                overall_ok = False
+        except Exception as e:
             overall_ok = False
+            report["qdrant_roundtrip"] = {"ok": False, "temp_collection": temp_col}
+            errors["qdrant_roundtrip"] = str(e)
+
     except Exception as e:
         overall_ok = False
-        report["qdrant_roundtrip"] = {"ok": False, "temp_collection": temp_col}
-        errors["qdrant_roundtrip"] = str(e)
+        errors["unhandled"] = str(e)
 
+    # Always return a JSONResponse so FastAPI never tries to serialize None
     return JSONResponse({"ok": overall_ok, "report": report, "errors": errors or None})
