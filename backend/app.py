@@ -261,15 +261,17 @@ def chat(req: ChatRequest, _: None = Depends(require_auth)):
     return {"reply": reply.model_dump(), "used_memory": recall}
 
 # ========= E2E SMOKE TEST =========
-from fastapi import Depends, Header, HTTPException, status, Query
-from fastapi.responses import JSONResponse
+# ========= E2E SMOKE TEST (paste-in) =========
 import os, time, uuid, httpx
 from typing import Any, Dict
+from fastapi import Depends, Header, HTTPException, status, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
-from .embeddings import embed_texts
+from .embeddings import embed_texts  # async helper
 
+# Env
 API_AUTH_TOKEN = (os.getenv("API_AUTH_TOKEN") or "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL")
@@ -281,7 +283,10 @@ def require_api_token(
     authorization: str | None = Header(default=None),
     token: str | None = Query(default=None),
 ):
+    """Accept API_AUTH_TOKEN as x-api-key, Bearer, or ?token= for easy testing."""
     want = API_AUTH_TOKEN
+    if not want:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     if token and token.strip() == want:
         return True
     if x_api_key and x_api_key.strip() == want:
@@ -342,7 +347,8 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
             overall_ok = False
             report["embeddings"] = {"ok": False}
             errors["embeddings"] = str(e)
-            dim = int(os.getenv("EMBED_DIMENSION", "384"))  # fallback
+            # Fallback to your configured/default size (384 for BGE-small)
+            dim = int(os.getenv("EMBED_DIMENSION", "384"))
 
         # 3) Neon (Postgres)
         t0 = time.perf_counter()
@@ -360,25 +366,36 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
             report["neon"] = {"ok": False}
             errors["neon"] = str(e)
 
-        # 4) Qdrant roundtrip (diagnostic)
+        # 4) Qdrant roundtrip in a temp collection (PointStruct to force ID)
         t0 = time.perf_counter()
         temp_col = f"codex-smoke-{uuid.uuid4().hex[:8]}"
         try:
             qdr = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+
+            # Create temp collection with the probed dim (or fallback)
             qdr.recreate_collection(
                 collection_name=temp_col,
                 vectors_config=qm.VectorParams(size=dim or 384, distance=qm.Distance.COSINE),
             )
+
+            # Embed a single test vector
             vector = (await embed_texts(["temp roundtrip"]))[0]
-            pid = uuid.uuid4().hex
+            point_id = uuid.uuid4().hex
+            payload = {"tag": "smoke", "ts": int(time.time())}
+
+            # Use PointStruct so our ID is honored; wait until indexed
             qdr.upsert(
                 collection_name=temp_col,
-                points=qm.Batch(ids=[pid], vectors=[vector], payloads=[{"tag":"smoke"}]),
+                points=[qm.PointStruct(id=point_id, vector=vector, payload=payload)],
                 wait=True,
             )
+
+            # Sanity checks
             cnt = qdr.count(collection_name=temp_col, exact=True).count
-            retrieved = qdr.retrieve(collection_name=temp_col, ids=[pid])
-            retrieved_ok = bool(retrieved) and str(retrieved[0].id) == str(pid)
+            retrieved = qdr.retrieve(collection_name=temp_col, ids=[point_id])
+            retrieved_ok = bool(retrieved) and str(retrieved[0].id) == str(point_id)
+
+            # Exact search to bypass ANN timing
             res = qdr.search(
                 collection_name=temp_col,
                 query_vector=vector,
@@ -386,20 +403,29 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
                 with_payload=False,
                 search_params=qm.SearchParams(exact=True),
             )
-            search_ok = bool(res) and str(res[0].id) == str(pid)
+            top_id = (str(res[0].id) if res else None)
+            search_ok = bool(res) and top_id == str(point_id)
             score = (res[0].score if res else None)
+
+            # Extra: retrieve by whatever search returned (diagnostic)
+            retrieved_by_top = qdr.retrieve(collection_name=temp_col, ids=[top_id]) if top_id else []
+            retrieved_by_top_ok = bool(retrieved_by_top)
+
+            # Cleanup
             qdr.delete_collection(collection_name=temp_col)
 
             hit_ok = (cnt >= 1) and retrieved_ok and search_ok
             report["qdrant_roundtrip"] = {
                 "ok": hit_ok,
-                "latency_ms": int((time.perf_counter()-t0)*1000),
+                "latency_ms": int((time.perf_counter() - t0) * 1000),
                 "temp_collection": temp_col,
                 "count": cnt,
                 "retrieved_ok": retrieved_ok,
                 "search_ok": search_ok,
                 "search_score": score,
                 "dim_used": dim or 384,
+                "search_top_id": top_id,
+                "retrieved_by_top_ok": retrieved_by_top_ok,
             }
             if not hit_ok:
                 overall_ok = False
@@ -412,6 +438,5 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
         overall_ok = False
         errors["unhandled"] = str(e)
 
-    # Always return a JSONResponse so FastAPI never tries to serialize None
     return JSONResponse({"ok": overall_ok, "report": report, "errors": errors or None})
-
+# ========= /E2E SMOKE TEST =========
