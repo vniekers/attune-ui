@@ -360,14 +360,14 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
             report["neon"] = {"ok": False}
             errors["neon"] = str(e)
 
-    # 4) Qdrant roundtrip in a temp collection (PointStruct to force ID)
-    t0 = time.perf_counter()
-    temp_col = f"codex-smoke-{uuid.uuid4().hex[:8]}"
-    try:
-        qdr = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        # 4) Qdrant roundtrip in a temp collection (PointStruct to force ID)
+        t0 = time.perf_counter()
+        temp_col = f"codex-smoke-{uuid.uuid4().hex[:8]}"
+        try:
+            qdr = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
-        # Create temp collection at the probed dim
-        qdr.recreate_collection(
+            # Create temp collection at the probed dim
+            qdr.recreate_collection(
             collection_name=temp_col,
             vectors_config=qm.VectorParams(size=dim or 384, distance=qm.Distance.COSINE),
         )
@@ -429,3 +429,5 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
         overall_ok = False
         report["qdrant_roundtrip"] = {"ok": False, "temp_collection": temp_col}
         errors["qdrant_roundtrip"] = str(e)
+
+    return JSONResponse({"ok": overall_ok, "report": report, "errors": errors or None})
