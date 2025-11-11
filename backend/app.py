@@ -414,18 +414,23 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
             # Cleanup
             qdr.delete_collection(collection_name=temp_col)
 
-            hit_ok = (cnt >= 1) and retrieved_ok and search_ok
+            # after computing: cnt, res, top_id, score, retrieved_by_top_ok, retrieved_ok ...
+
+            # Old strict success:
+            # hit_ok = (cnt >= 1) and retrieved_ok and search_ok
+            # New tolerant success:  (chat 3 - for fixes to id issue)
+            hit_ok = (cnt >= 1) and retrieved_by_top_ok and (score is not None and score > 0.999)
             report["qdrant_roundtrip"] = {
                 "ok": hit_ok,
                 "latency_ms": int((time.perf_counter() - t0) * 1000),
                 "temp_collection": temp_col,
                 "count": cnt,
-                "retrieved_ok": retrieved_ok,
+                "retrieved_ok": retrieved_ok,   # may be False if server re-IDs
                 "search_ok": search_ok,
                 "search_score": score,
                 "dim_used": dim or 384,
                 "search_top_id": top_id,
-                "retrieved_by_top_ok": retrieved_by_top_ok,
+                "retrieved_by_top_ok": retrieved_by_top_ok,    # this is the key one
             }
             if not hit_ok:
                 overall_ok = False
