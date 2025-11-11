@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 ENV_PATH = Path(__file__).parent / ".env"
 
 # Hardcoding bad practise to get server up
-# EMBED_DIM = int(os.getenv("EMBED_DIMENSION", "768"))  # nomic-embed-text-v1.5 = 768
-EMBED_DIM = int(os.getenv("EMBED_DIMENSION", "384"))  # BAAI/bge-small-en-v1.5 = 384
+EMBED_DIM = int(os.getenv("EMBED_DIMENSION", "768"))  # nomic-embed-text-v1.5 = 768
+#EMBED_DIM = int(os.getenv("EMBED_DIMENSION", "384"))  # BAAI/bge-small-en-v1.5 = 384
 
 # In local dev, load .env if it exists. In Render, env vars come from the dashboard.
 if ENV_PATH.exists():
@@ -445,3 +445,33 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
 
     return JSONResponse({"ok": overall_ok, "report": report, "errors": errors or None})
 # ========= /E2E SMOKE TEST =========
+
+from pydantic import BaseModel
+from typing import List
+from .embeddings import embed_texts
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qm
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = 5
+
+@app.post("/search")
+async def search(req: SearchRequest, _ok=Depends(require_api_token)):
+    qdr = QdrantClient(url=os.environ["QDRANT_URL"], api_key=os.environ.get("QDRANT_API_KEY"))
+    vec = (await embed_texts([req.query]))[0]
+    hits = qdr.search(
+        collection_name=os.environ.get("PRIVATE_COLLECTION", "codex-private"),
+        query_vector=vec,
+        limit=req.top_k,
+        with_payload=True,
+        search_params=qm.SearchParams(exact=True),
+    )
+    return {
+        "ok": True,
+        "results": [
+            {"id": str(h.id), "score": h.score, "payload": h.payload}
+            for h in hits
+        ],
+    }
+
