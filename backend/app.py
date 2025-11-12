@@ -66,6 +66,43 @@ client = OpenAI(base_url=OPENAI_BASE, api_key=OPENAI_KEY)
 
 # === DATABASE + VECTOR SETUP ===
 def ensure_schema():
+    def ensure_payload_index(col_name: str):
+        try:
+            qdrant.create_payload_index(
+                collection_name=col_name,
+                field_name="user_id",
+                field_schema=qm.PayloadSchemaType.KEYWORD,
+            )
+        except Exception:
+            pass  # already exists
+
+    def ensure_collection(col_name: str, dim: int):
+        try:
+            info = qdrant.get_collection(collection_name=col_name)
+            # Try to read current vector size
+            current = None
+            try:
+                current = info.config.params.vectors.size
+            except Exception:
+                # Older clients may not expose it — play safe in dev
+                pass
+
+            if current is None or current != dim:
+                # Dimension changed or unknown → recreate (drops data)
+                qdrant.recreate_collection(
+                    collection_name=col_name,
+                    vectors_config=qm.VectorParams(size=dim, distance=qm.Distance.COSINE),
+                )
+        except Exception:
+            # Collection missing → create fresh
+            qdrant.create_collection(
+                collection_name=col_name,
+                vectors_config=qm.VectorParams(size=dim, distance=qm.Distance.COSINE),
+            )
+
+        ensure_payload_index(col_name)
+
+    # Postgres schema
     with engine.begin() as con:
         con.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         con.execute(text("""
@@ -84,23 +121,10 @@ def ensure_schema():
             content TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );"""))
-    names = [c.name for c in qdrant.get_collections().collections]
-    for col in [PRIVATE_COL, SHARED_COL]:
-        if col not in names:
-            qdrant.create_collection(
-                collection_name=col,
-                vectors_config=qm.VectorParams(size=EMBED_DIM, distance=qm.Distance.COSINE),
-            )
-        # NEW: ensure payload index for user_id
-        try:
-            qdrant.create_payload_index(
-                collection_name=col,
-                field_name="user_id",
-                field_schema=qm.PayloadSchemaType.KEYWORD,
-            )
-        except Exception:
-            # index probably exists already — ignore
-            pass
+
+    # Ensure Qdrant collections exist at the correct dimension
+    ensure_collection(PRIVATE_COL, EMBED_DIM)
+    ensure_collection(SHARED_COL, EMBED_DIM)
 
 
 ensure_schema()
