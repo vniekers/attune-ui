@@ -48,7 +48,9 @@ OPENAI_MODEL = os.environ["OPENAI_MODEL"]
 OPENAI_KEY = os.environ["OPENAI_API_KEY"]
 NEON_URL = os.environ["NEON_URL"]
 QDRANT_URL = os.environ["QDRANT_URL"]
-EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+# EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+# EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+# embedder = None  # lazy init
 PRIVATE_COL = os.getenv("PRIVATE_COLLECTION", "app-private")
 SHARED_COL = os.getenv("SHARED_COLLECTION", "app-shared")
 API_AUTH = os.getenv("API_AUTH_TOKEN", "")
@@ -129,8 +131,13 @@ def redact(text: str) -> str:
     return text
 
 
+# def embed(texts: List[str]):
+#     return embedder.encode(texts, normalize_embeddings=True).tolist()
+from .embeddings import embed_texts_sync  # already imported above
+
 def embed(texts: List[str]):
-    return embedder.encode(texts, normalize_embeddings=True).tolist()
+    # Use the robust, configured sync embedder you already ship
+    return embed_texts_sync(texts)
 
 
 def memory_upsert(user_id: str, msgs: List[ChatMessage], use_shared: bool):
@@ -141,12 +148,17 @@ def memory_upsert(user_id: str, msgs: List[ChatMessage], use_shared: bool):
     for i, m in enumerate(msgs):
         if m.role != "user":
             continue
-        vec = embed([m.content])[0]
+        try:
+            vec = embed([m.content])[0]
+        except Exception:
+            continue  # skip this point if embedding fails
         points.append(qm.PointStruct(
             id=str(uuid.uuid4()),
             vector=vec,
             payload={"user_id": user_id, "role": m.role, "content": m.content, "ts": ts + i}
         ))
+
+
     if points:
         qdrant.upsert(collection_name=col, points=points)
         if use_shared:
@@ -155,18 +167,27 @@ def memory_upsert(user_id: str, msgs: List[ChatMessage], use_shared: bool):
 
 def memory_search(user_id: str, query: str, k: int = 5):
     """Retrieve top-k similar past messages for context."""
-    vec = embed([query])[0]
-    out = qdrant.search(
-        collection_name=PRIVATE_COL,
-        query_vector=vec,
-        limit=k,
-        query_filter=qm.Filter(
-            must=[qm.FieldCondition(key="user_id", match=qm.MatchValue(value=user_id))]
-        ),
-    )
-    if len(out) < k:
-        out += qdrant.search(collection_name=SHARED_COL, query_vector=vec, limit=k)
-    return [{"content": r.payload.get("content", "")} for r in out]
+    try:
+        vec = embed([query])[0]
+    except Exception:
+        # Embeddings temporarily unavailable; skip recall
+        return []
+    try:
+        out = qdrant.search(
+            collection_name=PRIVATE_COL,
+            query_vector=vec,
+            limit=k,
+            query_filter=qm.Filter(
+                must=[qm.FieldCondition(key="user_id", match=qm.MatchValue(value=user_id))]
+            ),
+        )
+        if len(out) < k:
+            out += qdrant.search(collection_name=SHARED_COL, query_vector=vec, limit=k)
+        return [{"content": r.payload.get("content", "")} for r in out]
+    except Exception:
+        # Qdrant hiccup; skip recall
+        return []
+
 
 def persist_chat(user_id: str, messages: List[Dict[str, Any]]):
     """Persist chat logs into Neon DB (messages stored as JSONB)."""
@@ -232,7 +253,13 @@ def health():
 @app.post("/chat")
 def chat(req: ChatRequest, _: None = Depends(require_auth)):
     """Main chat endpoint."""
-    recall = memory_search(req.user_id, req.messages[-1].content, k=4)
+    # recall = memory_search(req.user_id, req.messages[-1].content, k=4)
+    recall = []
+    try:
+        if req.use_shared_memory or req.send_memory_to_llm:
+            recall = memory_search(req.user_id, req.messages[-1].content, k=4)
+    except Exception:
+        recall = []
     mem_block = "\n".join(f"- {r['content']}" for r in recall if r.get("content"))
 
     system_prefix = {
