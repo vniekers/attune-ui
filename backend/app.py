@@ -375,7 +375,7 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
             report["embeddings"] = {"ok": False}
             errors["embeddings"] = str(e)
             # Fallback to your configured/default size (384 for BGE-small)
-            dim = int(os.getenv("EMBED_DIMENSION", "384"))
+            dim = int(os.getenv("EMBED_DIMENSION", "768"))
 
         # 3) Neon (Postgres)
         t0 = time.perf_counter()
@@ -402,7 +402,7 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
             # Create temp collection with the probed dim (or fallback)
             qdr.recreate_collection(
                 collection_name=temp_col,
-                vectors_config=qm.VectorParams(size=dim or 384, distance=qm.Distance.COSINE),
+                vectors_config=qm.VectorParams(size=dim or 768, distance=qm.Distance.COSINE),
             )
 
             # Embed a single test vector
@@ -455,7 +455,7 @@ async def e2e_smoke(_ok=Depends(require_api_token)):
                 "retrieved_ok": retrieved_ok,   # may be False if server re-IDs
                 "search_ok": search_ok,
                 "search_score": score,
-                "dim_used": dim or 384,
+                "dim_used": dim or 768,
                 "search_top_id": top_id,
                 "retrieved_by_top_ok": retrieved_by_top_ok,    # this is the key one
             }
