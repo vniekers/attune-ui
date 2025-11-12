@@ -126,7 +126,6 @@ def ensure_schema():
     ensure_collection(PRIVATE_COL, EMBED_DIM)
     ensure_collection(SHARED_COL, EMBED_DIM)
 
-
 ensure_schema()
 
 app = FastAPI(title="Codex Memory API")
