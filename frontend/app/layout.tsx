@@ -1,7 +1,8 @@
-import { UserProvider } from "@auth0/nextjs-auth0/client";
+import { Auth0Provider } from "@auth0/nextjs-auth0/client";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { HeaderUser } from "@/components/HeaderUser";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -26,26 +27,29 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen flex flex-col`}
       >
-        <UserProvider>
-        <header className="border-b">
-          <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold tracking-tight">CODEX OS</h1>
-            <p className="text-sm text-gray-500">
-              Talk to your Codex (private API)
-            </p>
-          </div>
-        </header>
+        <Auth0Provider>
+          <header className="border-b">
+            <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+              <div className="flex flex-col">
+                <h1 className="text-xl font-semibold tracking-tight">CODEX OS</h1>
+                <p className="text-sm text-gray-500">
+                  Talk to your Codex (private API)
+                </p>
+              </div>
+              <HeaderUser />
+            </div>
+          </header>
 
-        <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
-          {children}
-        </main>
+          <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
+            {children}
+          </main>
 
-        <footer className="border-t">
-          <div className="max-w-5xl mx-auto px-4 py-4 text-xs text-gray-500">
-            © {new Date().getFullYear()} Tiny & Judy — CODEX OS
-          </div>
-        </footer>
-        </UserProvider>
+          <footer className="border-t">
+            <div className="max-w-5xl mx-auto px-4 py-4 text-xs text-gray-500">
+              © {new Date().getFullYear()} Tiny & Judy — CODEX OS
+            </div>
+          </footer>
+        </Auth0Provider>
       </body>
     </html>
   );
