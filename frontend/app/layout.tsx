@@ -1,3 +1,4 @@
+import { UserProvider } from "@auth0/nextjs-auth0/client";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
@@ -25,6 +26,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen flex flex-col`}
       >
+        <UserProvider>
         <header className="border-b">
           <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
             <h1 className="text-xl font-semibold tracking-tight">CODEX OS</h1>
@@ -43,6 +45,7 @@ export default function RootLayout({
             © {new Date().getFullYear()} Tiny & Judy — CODEX OS
           </div>
         </footer>
+        </UserProvider>
       </body>
     </html>
   );
